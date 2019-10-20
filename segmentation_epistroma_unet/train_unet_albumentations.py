@@ -150,7 +150,7 @@ class Dataset(object):
             img_new = augmented['image']
             mask_new,weight_new = augmented['masks']
 
-            return img_new, mask_new, weight_new
+        return img_new, mask_new, weight_new
     def __len__(self):
         return self.nitems
 
