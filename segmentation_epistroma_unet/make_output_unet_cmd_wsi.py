@@ -49,7 +49,7 @@ parser.add_argument('input_pattern',
 
 
 parser.add_argument('-r', '--resolution', help="image resolution in microns per pixel", default=1, type=float)
-parser.add_argument('-c', '--color', help="annotation color to use, default None", default='green', type=str)
+parser.add_argument('-c', '--color', help="annotation color to use, default None", default=None, type=str)
 parser.add_argument('-a', '--annotation', help="annotation index to use, default largest", default='wsi', type=str)
 
 parser.add_argument('-p', '--patchsize', help="patchsize, default 256", default=256, type=int)
@@ -175,7 +175,8 @@ for fname in files:
     stride_size = int(base_stride_size * (args.resolution/img["mpp"]))
     
     if(args.annotation.lower() == 'wsi'):
-        img_dims = [0,0,w["img_dims"][0],w["img_dims"][1]]
+        base_layer = img["mpps"].index(img["mpp"])
+        img_dims = [0,0,img["img_dims"][base_layer][0],img["img_dims"][base_layer][1]]
     else:
         img_dims = img.get_dimensions_of_annotation(args.color,args.annotation)
     
