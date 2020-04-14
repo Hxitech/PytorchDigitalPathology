@@ -170,7 +170,10 @@ for fname in files:
     xml_dir = fname[0:fname.rfind(os.path.sep)]
     xml_fname = xml_dir + os.path.sep + os.path.basename(fname)[0:os.path.basename(fname).rfind('.')] + '.xml'
 
-    img = wsi.wsi(fname,xml_fname)
+    if(args.annotation.lower() == 'wsi'):
+        img = wsi.wsi(fname)
+    else:
+        img = wsi.wsi(fname,xml_fname)
     
     stride_size = int(base_stride_size * (args.resolution/img["mpp"]))
     
@@ -227,16 +230,18 @@ for fname in files:
 
         #turn all the tiles into an image
         output=np.concatenate(np.concatenate(output,1),1)
+        output = output.transpose((1,0,2))
+        output = output.argmax(axis=2) * (256 / (output.shape[-1] - 1) - 1)
 
         #incase there was extra padding to get a multiple of patch size, remove that as well
-        mask = img.get_annotated_region(args.resolution,args.color,args.annotation,return_img=False)
-        mask = mask[1]
-
-        output = output.transpose((1,0,2))
-        output = output[0:mask.shape[0], 0:mask.shape[1], :] #remove paddind, crop back
-        output = output.argmax(axis=2) * (256 / (output.shape[-1] - 1) - 1)
-        output = cv2.bitwise_and(output,output,mask=np.uint8(mask))
-        output = np.uint8((output>0) + (mask==0))*255
+        if(args.annotation.lower() != 'wsi'):
+            mask = img.get_annotated_region(args.resolution,args.color,args.annotation,return_img=False)
+            mask = mask[1]
+            output = output[0:mask.shape[0], 0:mask.shape[1], :] #remove paddind, crop back
+            output = cv2.bitwise_and(output,output,mask=np.uint8(mask))
+            output = np.uint8((output>0) + (mask==0))*255
+        else:
+            output = np.uint8(output>0)
         
         # --- save output
 
