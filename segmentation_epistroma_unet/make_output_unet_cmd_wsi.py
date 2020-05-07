@@ -224,7 +224,7 @@ for fname in files:
         _,mask = img.get_annotated_region(args.resolution,args.color,args.annotation,return_img=False)        
 
         output = output[0:mask.shape[0], 0:mask.shape[1]] #remove paddind, crop back
-        output = np.bitwise_and(output>0,mask>0)
+        output = np.bitwise_and(output>0,mask>0)*255
         
         # --- save output
 
