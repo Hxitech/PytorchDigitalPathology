@@ -182,8 +182,8 @@ for fname in files:
     
         x_start = int(img_dims[0])
         y_start = int(img_dims[1])
-        w_orig = int(img_dims[2])
-        h_orig = int(img_dims[3])
+        w_orig = int(img_dims[2]) - x_start
+        h_orig = int(img_dims[3]) - y_start
 
 
         w = int(w_orig + (patch_size - (w_orig % patch_size)))
@@ -196,12 +196,10 @@ for fname in files:
         points_split = divide_batch(grid_points,batch_size)
 
         #in case we have a large network, lets cut the list of tiles into batches
-        output = np.zeros((len(grid_points),checkpoint["n_classes"],patch_size,patch_size),np.float16)
+        output = np.zeros((len(grid_points),base_stride_size,base_stride_size),np.uint8)
         for i,batch_points in enumerate(points_split):
 
             batch_arr = np.array([img.get_tile(args.resolution,coords,(patch_size,patch_size)) for coords in batch_points])
-#             print(np.shape(arr_out))
-#             arr_out = arr_out.reshape(-1,patch_size,patch_size,3)
 
             arr_out_gpu = torch.from_numpy(batch_arr.transpose(0, 3, 1, 2) / 255).type('torch.FloatTensor').to(device)
 
@@ -210,35 +208,26 @@ for fname in files:
 
             # --- pull from GPU and append to rest of output 
             output_batch = output_batch.detach().cpu().numpy()
+            output_batch = output_batch.argmax(axis=1)
+            
+            #remove the padding from each tile, we only keep the center
+            output_batch = output_batch[:,base_stride_size//2:-base_stride_size//2,base_stride_size//2:-base_stride_size//2]
 
-            output[((i+1)*batch_size - batch_size):((i+1)*batch_size),:,:,:] = output_batch
-#             output = np.append(output,output_batch,axis=0)
+            output[((i+1)*batch_size - batch_size):((i+1)*batch_size),:,:] = output_batch
 
-
-        output = output.transpose((0, 3, 2, 1))
 
         #turn from a single list into a matrix of tiles
-        output = output.reshape(len(x_points),len(y_points),patch_size,patch_size,output.shape[3])
-
-        #remove the padding from each tile, we only keep the center
-        output=output[:,:,base_stride_size//2:-base_stride_size//2,base_stride_size//2:-base_stride_size//2,:]
-
-        #turn all the tiles into an image
-        output=np.concatenate(np.concatenate(output,1),1)
+        output = output.reshape(len(x_points),len(y_points),base_stride_size,base_stride_size)
+        output = np.concatenate(np.concatenate(output.transpose(1,0,2,3),1),1)
 
         #incase there was extra padding to get a multiple of patch size, remove that as well
-        mask = img.get_annotated_region(args.resolution,args.color,args.annotation,return_img=False)
-        mask = mask[1]
+        _,mask = img.get_annotated_region(args.resolution,args.color,args.annotation,return_img=False)        
 
-        output = output.transpose((1,0,2))
-        output = output[0:mask.shape[0], 0:mask.shape[1], :] #remove paddind, crop back
-        output = output.argmax(axis=2) * (256 / (output.shape[-1] - 1) - 1)
-        output = cv2.bitwise_and(output,output,mask=np.uint8(mask))
-        output = np.uint8((output>0) + (mask==0))*255
+        output = output[0:mask.shape[0], 0:mask.shape[1]] #remove paddind, crop back
+        output = np.bitwise_and(output>0,mask>0)
         
         # --- save output
 
-        # cv2.imwrite(newfname_class, (output.argmax(axis=2) * (256 / (output.shape[-1] - 1) - 1)).astype(np.uint8))
         cv2.imwrite(newfname_class, output)
 
     else:
