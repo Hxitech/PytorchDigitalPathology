@@ -14,9 +14,10 @@ import numpy as np
 import cv2
 import torch
 import sys
+import time
 
 sys.path.insert(1,'/mnt/rstor/CSE_BME_AXM788/home/pjl54/WSI_handling')
-import wsi
+from WSI_handling import wsi
 
 
 # In[ ]:
@@ -163,18 +164,18 @@ for fname in files:
     if not args.force and os.path.exists(newfname_class):
         print("Skipping as output file exists")
         continue
-        
+    start_time = time.time()
     cv2.imwrite(newfname_class, np.zeros(shape=(1, 1)))                                            
     
     xml_dir = fname[0:fname.rfind(os.path.sep)]
     xml_fname = xml_dir + os.path.sep + os.path.basename(fname)[0:os.path.basename(fname).rfind('.')] + '.xml'
 
-    img = wsi.wsi(fname,xml_fname)
+    img = wsi(fname,xml_fname)
     
     stride_size = int(base_stride_size * (args.resolution/img["mpp"]))
     
     if(args.annotation.lower() == 'wsi'):
-        img_dims = [0,0,w["img_dims"][0],w["img_dims"][1]]
+        img_dims = [0,0,img["img_dims"][0][0],img["img_dims"][0][1]]
     else:
         img_dims = img.get_dimensions_of_annotation(args.color,args.annotation)
     
@@ -220,15 +221,15 @@ for fname in files:
         output = output.reshape(len(x_points),len(y_points),base_stride_size,base_stride_size)
         output = np.concatenate(np.concatenate(output.transpose(1,0,2,3),1),1)
 
-        #incase there was extra padding to get a multiple of patch size, remove that as well
-        _,mask = img.get_annotated_region(args.resolution,args.color,args.annotation,return_img=False)        
+        if(args.annotation.lower() == 'wsi'):
+            cv2.imwrite(newfname_class,(output>0)*255)
+        else:
 
-        output = output[0:mask.shape[0], 0:mask.shape[1]] #remove paddind, crop back
-        output = np.bitwise_and(output>0,mask>0)*255
-        
-        # --- save output
-
-        cv2.imwrite(newfname_class, output)
+        #in case there was extra padding to get a multiple of patch size, remove that as well
+            _,mask = img.get_annotated_region(args.resolution,args.color,args.annotation,return_img=False)
+            output = output[0:mask.shape[0], 0:mask.shape[1]] #remove paddind, crop back
+            output = np.bitwise_and(output>0,mask>0)*255
+            cv2.imwrite(newfname_class, output)
 
     else:
         print('No annotation of color')
@@ -236,3 +237,4 @@ for fname in files:
     output = None
     output_batch = None
     mask = None
+    print('Elapsed time = ' + str(time.time()-start_time))
