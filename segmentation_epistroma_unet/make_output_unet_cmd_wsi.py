@@ -16,7 +16,6 @@ import torch
 import sys
 import time
 
-sys.path.insert(1,'/mnt/rstor/CSE_BME_AXM788/home/pjl54/WSI_handling')
 from WSI_handling import wsi
 
 
