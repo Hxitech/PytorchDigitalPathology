@@ -16,7 +16,6 @@ import torch
 import sys
 import time
 
-sys.path.insert(1,'/mnt/rstor/CSE_BME_AXM788/home/pjl54/WSI_handling')
 from WSI_handling import wsi
 
 
@@ -153,8 +152,7 @@ else:  # user sent us a wildcard, need to use glob to find files
 
 
 # ------ work on files
-for fname in files:
-    
+for fname in files:    
     fname = fname.strip()
     newfname_class = "%s/%s_class.png" % (OUTPUT_DIR, os.path.basename(fname)[0:fname.rfind('.')])
 
@@ -166,21 +164,21 @@ for fname in files:
         continue
     start_time = time.time()
     cv2.imwrite(newfname_class, np.zeros(shape=(1, 1)))                                            
-    
+
     xml_dir = fname[0:fname.rfind(os.path.sep)]
     xml_fname = xml_dir + os.path.sep + os.path.basename(fname)[0:os.path.basename(fname).rfind('.')] + '.xml'
 
     img = wsi(fname,xml_fname)
-    
+
     stride_size = int(base_stride_size * (args.resolution/img["mpp"]))
-    
+
     if(args.annotation.lower() == 'wsi'):
         img_dims = [0,0,img["img_dims"][0][0],img["img_dims"][0][1]]
     else:
         img_dims = img.get_dimensions_of_annotation(args.color,args.annotation)
-    
-    if img_dims:
-    
+
+    if img_dims:    
+
         x_start = int(img_dims[0])
         y_start = int(img_dims[1])
         w_orig = int(img_dims[2]) - x_start
@@ -190,18 +188,26 @@ for fname in files:
         w = int(w_orig + (patch_size - (w_orig % patch_size)))
         h = int(h_orig + (patch_size - (h_orig % patch_size)))
 
-        x_points = range(x_start-stride_size//2,x_start+w+stride_size//2,stride_size)
-        y_points = range(y_start-stride_size//2,y_start+h+stride_size//2,stride_size)
+        base_edge_length = base_stride_size*int(math.sqrt(batch_size))        
+    
+        divisible_wh = tuple([k + ((base_edge_length + base_stride_size) - (k % (base_edge_length + base_stride_size))) for k in [w,h]])
+            
+        roi = img.get_tile(args.resolution,(x_start-stride_size//2,y_start-stride_size//2),divisible_wh)
+        print('ROI getting time = ' + str(time.time()-start_time))
+        x_points = range(0,np.shape(roi)[0],base_stride_size*int(math.sqrt(batch_size)))
+        y_points = range(0,np.shape(roi)[1],base_stride_size*int(math.sqrt(batch_size)))
+        grid_points = [(x,y) for x in x_points for y in y_points]                
 
-        grid_points = [(x,y) for x in x_points for y in y_points]
-        points_split = divide_batch(grid_points,batch_size)
+        output = np.zeros([np.shape(roi)[0],np.shape(roi)[1]],dtype='uint8')
+        
+        for i,batch_points in enumerate(grid_points):
 
-        #in case we have a large network, lets cut the list of tiles into batches
-        output = np.zeros((len(grid_points),base_stride_size,base_stride_size),np.uint8)
-        for i,batch_points in enumerate(points_split):
+            # get the tile of the batch
+            big_patch = roi[batch_points[0]:(batch_points[0]+base_edge_length+base_stride_size),batch_points[1]:(batch_points[1]+base_edge_length+base_stride_size),:]
 
-            batch_arr = np.array([img.get_tile(args.resolution,coords,(patch_size,patch_size)) for coords in batch_points])
-
+            # split the tile into patch_size patches
+            batch_arr = np.array([big_patch[x:x+patch_size,y:y+patch_size,:] for y in range(0,np.shape(big_patch)[1]-base_stride_size,base_stride_size) for x in range(0,np.shape(big_patch)[0]-base_stride_size,base_stride_size)])
+        
             arr_out_gpu = torch.from_numpy(batch_arr.transpose(0, 3, 1, 2) / 255).type('torch.FloatTensor').to(device)
 
             # ---- get results
@@ -211,15 +217,13 @@ for fname in files:
             output_batch = output_batch.detach().cpu().numpy()
             output_batch = output_batch.argmax(axis=1)
             
-            #remove the padding from each tile, we only keep the center
-            output_batch = output_batch[:,base_stride_size//2:-base_stride_size//2,base_stride_size//2:-base_stride_size//2]
+            #remove the padding from each tile, we only keep the center            
+            output_batch = output_batch[:,base_stride_size//2:-base_stride_size//2,base_stride_size//2:-base_stride_size//2]            
+            
+            reconst = np.concatenate(np.concatenate(output_batch.reshape(int(np.shape(big_patch)[1]/(patch_size//2))-1,int(np.shape(big_patch)[0]/(patch_size//2))-1,base_stride_size,base_stride_size),axis=2),axis=0)
 
-            output[((i+1)*batch_size - batch_size):((i+1)*batch_size),:,:] = output_batch
+            output[batch_points[0]:(batch_points[0]+np.shape(big_patch)[0]-base_stride_size),batch_points[1]:(batch_points[1]+np.shape(big_patch)[1]-base_stride_size)] = reconst
 
-
-        #turn from a single list into a matrix of tiles
-        output = output.reshape(len(x_points),len(y_points),base_stride_size,base_stride_size)
-        output = np.concatenate(np.concatenate(output.transpose(1,0,2,3),1),1)
 
         if(args.annotation.lower() == 'wsi'):
             cv2.imwrite(newfname_class,(output>0)*255)
@@ -227,6 +231,7 @@ for fname in files:
 
         #in case there was extra padding to get a multiple of patch size, remove that as well
             _,mask = img.get_annotated_region(args.resolution,args.color,args.annotation,return_img=False)
+            output_pre = output
             output = output[0:mask.shape[0], 0:mask.shape[1]] #remove paddind, crop back
             output = np.bitwise_and(output>0,mask>0)*255
             cv2.imwrite(newfname_class, output)
