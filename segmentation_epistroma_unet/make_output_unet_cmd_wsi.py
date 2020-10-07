@@ -10,6 +10,8 @@
 import argparse
 import os
 import glob
+import math
+
 import numpy as np
 import cv2
 import torch
@@ -181,9 +183,8 @@ for fname in files:
 
         x_start = int(img_dims[0])
         y_start = int(img_dims[1])
-        w_orig = int(img_dims[2]) - x_start
-        h_orig = int(img_dims[3]) - y_start
-
+        w_orig = img.get_coord_at_mpp(img_dims[2] - x_start,input_mpp=img['mpp'],output_mpp=args.resolution)
+        h_orig = img.get_coord_at_mpp(img_dims[3] - y_start,input_mpp=img['mpp'],output_mpp=args.resolution)
 
         w = int(w_orig + (patch_size - (w_orig % patch_size)))
         h = int(h_orig + (patch_size - (h_orig % patch_size)))
@@ -192,7 +193,7 @@ for fname in files:
     
         divisible_wh = tuple([k + ((base_edge_length + base_stride_size) - (k % (base_edge_length + base_stride_size))) for k in [w,h]])
             
-        roi = img.get_tile(args.resolution,(x_start-stride_size//2,y_start-stride_size//2),divisible_wh)
+        roi = img.get_tile(args.resolution,(x_start-stride_size//2,y_start-stride_size//2),(w+patch_size,h+patch_size))
         print('ROI getting time = ' + str(time.time()-start_time))
         x_points = range(0,np.shape(roi)[0],base_stride_size*int(math.sqrt(batch_size)))
         y_points = range(0,np.shape(roi)[1],base_stride_size*int(math.sqrt(batch_size)))
