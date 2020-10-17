@@ -153,98 +153,117 @@ else:  # user sent us a wildcard, need to use glob to find files
 # In[ ]:
 
 
-# ------ work on files
+def run_model(img_dims,patch_size,stride_size,base_stride_size,batch_size,args,img,annotation):
+    x_start = int(img_dims[0])
+    y_start = int(img_dims[1])
+    w_orig = img.get_coord_at_mpp(img_dims[2] - x_start,input_mpp=img['mpp'],output_mpp=args.resolution)
+    h_orig = img.get_coord_at_mpp(img_dims[3] - y_start,input_mpp=img['mpp'],output_mpp=args.resolution)
+
+    w = int(w_orig + (patch_size - (w_orig % patch_size)))
+    h = int(h_orig + (patch_size - (h_orig % patch_size)))
+
+    base_edge_length = base_stride_size*int(math.sqrt(batch_size))        
+    
+    # need to make sure we don't end up with a last row/column smaller than patch_size
+    h = h + patch_size if base_edge_length - (h % base_edge_length) else h
+    w = w + patch_size if base_edge_length - (w % base_edge_length) else w
+
+    roi = img.get_tile(args.resolution,(x_start-stride_size//2,y_start-stride_size//2),(w+base_stride_size,h+base_stride_size))
+    x_points = range(0,np.shape(roi)[0],base_stride_size*int(math.sqrt(batch_size)))
+    y_points = range(0,np.shape(roi)[1],base_stride_size*int(math.sqrt(batch_size)))
+    grid_points = [(x,y) for x in x_points for y in y_points]                
+
+    output = np.zeros([np.shape(roi)[0],np.shape(roi)[1]],dtype='uint8')
+
+    for i,batch_points in enumerate(grid_points):
+
+        # get the tile of the batch
+        big_patch = roi[batch_points[0]:(batch_points[0]+base_edge_length+base_stride_size),batch_points[1]:(batch_points[1]+base_edge_length+base_stride_size),:]
+
+        big_patch_gpu = torch.from_numpy(big_patch).type('torch.FloatTensor').to(device)
+        # split the tile into patch_size patches
+        batch_arr = torch.stack(([big_patch_gpu[x:x+patch_size,y:y+patch_size,:] for y in range(0,np.shape(big_patch_gpu)[1]-base_stride_size,base_stride_size) for x in range(0,np.shape(big_patch_gpu)[0]-base_stride_size,base_stride_size)]))        
+        batch_arr = batch_arr.permute(0,3,1,2) / 255
+
+        # ---- get results
+        output_batch = model(batch_arr)
+        output_batch = output_batch.argmax(axis=1)
+
+        #remove the padding from each tile, we only keep the center            
+        output_batch = output_batch[:,base_stride_size//2:-base_stride_size//2,base_stride_size//2:-base_stride_size//2]            
+
+        # --- pull from GPU and append to rest of output 
+        output_batch = output_batch.detach().cpu().numpy()            
+
+        reconst = np.concatenate(np.concatenate(output_batch.reshape(int(np.shape(big_patch)[1]/(patch_size//2))-1,int(np.shape(big_patch)[0]/(patch_size//2))-1,base_stride_size,base_stride_size),axis=2),axis=0)
+
+        output[batch_points[0]:(batch_points[0]+np.shape(big_patch)[0]-base_stride_size),batch_points[1]:(batch_points[1]+np.shape(big_patch)[1]-base_stride_size)] = reconst
+
+
+    if(args.annotation.lower() != 'wsi'):
+    #in case there was extra padding to get a multiple of patch size, remove that as well
+        _,mask = img.get_annotated_region(args.resolution,args.color,annotation,return_img=False)            
+        output = output[0:mask.shape[0], 0:mask.shape[1]] #remove paddind, crop back
+        output = np.bitwise_and(output>0,mask>0)*255
+    
+    return output
+
 for fname in files:    
     fname = fname.strip()
-    newfname_class = "%s/%s_class.png" % (OUTPUT_DIR, os.path.basename(fname)[0:fname.rfind('.')])
     
-    if not args.force and os.path.exists(newfname_class):
-        print(f"Skipping {fname} as {newfname_class} exists")
-        continue
-
-    print(f"working on file: \t {fname}")
-    print(f"saving to : \t {newfname_class}")
-
-    start_time = time.time()
-    cv2.imwrite(newfname_class, np.zeros(shape=(1, 1)))                                            
-
-    xml_dir = fname[0:fname.rfind(os.path.sep)]
-    xml_fname = xml_dir + os.path.sep + os.path.basename(fname)[0:os.path.basename(fname).rfind('.')] + '.xml'
+    if(args.annotation.lower() != 'all'):        
     
+        newfname_class = "%s/%s_class.png" % (OUTPUT_DIR, Path(fname).stem)
+
+        if not args.force and os.path.exists(newfname_class):
+            print("Skipping as output file exists")
+            continue
+        print(f"working on file: \t {fname}")
+        print(f"saving to : \t {newfname_class}")
+
+        start_time = time.time()
+        cv2.imwrite(newfname_class, np.zeros(shape=(1, 1)))                                            
+
+    xml_fname = Path(fname).with_suffix('.xml')
+    if not os.path.exists(xml_fname):
+        xml_fname = Path(fname).with_suffix('.json')
+
     if os.path.exists(xml_fname):
-
         img = wsi(fname,xml_fname)
-
         stride_size = int(base_stride_size * (args.resolution/img["mpp"]))
 
-        if(args.annotation.lower() == 'wsi'):
-            img_dims = [0,0,img["img_dims"][0][0],img["img_dims"][0][1]]
-        else:
-            img_dims = img.get_dimensions_of_annotation(args.color,args.annotation)
+        if(args.annotation.lower() == 'all'):        
+            annotations_todo = len(img.get_points(args.color,[]))
+            print(f"working on file: \t {fname}")            
 
-        if img_dims:
+            for k in range(0,annotations_todo):                
+                print('Working on annotation ' + str(k))
+                start_time = time.time()
+                img_dims = img.get_dimensions_of_annotation(args.color,k)
 
-            x_start = int(img_dims[0])
-            y_start = int(img_dims[1])
-            w_orig = img.get_coord_at_mpp(img_dims[2] - x_start,input_mpp=img['mpp'],output_mpp=args.resolution)
-            h_orig = img.get_coord_at_mpp(img_dims[3] - y_start,input_mpp=img['mpp'],output_mpp=args.resolution)
+                newfname_class = "%s/%s_%d_class.png" % (OUTPUT_DIR, Path(fname).stem,k)
 
+                if args.force or not os.path.exists(newfname_class):
+                    output = run_model(img_dims,patch_size,stride_size,base_stride_size,batch_size,args,img,annotation=k)        
+                    cv2.imwrite(newfname_class, output)                
 
-            w = int(w_orig + (patch_size - (w_orig % patch_size)))
-            h = int(h_orig + (patch_size - (h_orig % patch_size)))
+                output = None
+                print('Elapsed time = ' + str(time.time()-start_time))
 
-            base_edge_length = base_stride_size*int(math.sqrt(batch_size))        
-
-            roi = img.get_tile(args.resolution,(x_start-stride_size//2,y_start-stride_size//2),(w+patch_size,h+patch_size))
-            print('ROI getting time = ' + str(time.time()-start_time))
-
-            x_points = range(0,np.shape(roi)[0],base_stride_size*int(math.sqrt(batch_size)))
-            y_points = range(0,np.shape(roi)[1],base_stride_size*int(math.sqrt(batch_size)))
-            grid_points = [(x,y) for x in x_points for y in y_points]                
-
-            output = np.zeros([np.shape(roi)[0],np.shape(roi)[1]],dtype='uint8')
-
-            for i,batch_points in enumerate(grid_points):
-
-                # get the tile of the batch
-                big_patch = roi[batch_points[0]:(batch_points[0]+base_edge_length+base_stride_size),batch_points[1]:(batch_points[1]+base_edge_length+base_stride_size),:]
-
-                big_patch_gpu = torch.from_numpy(big_patch).type('torch.FloatTensor').to(device)
-                # split the tile into patch_size patches
-                batch_arr = torch.stack(([big_patch_gpu[x:x+patch_size,y:y+patch_size,:] for y in range(0,np.shape(big_patch_gpu)[1]-base_stride_size,base_stride_size) for x in range(0,np.shape(big_patch_gpu)[0]-base_stride_size,base_stride_size)]))        
-                batch_arr = batch_arr.permute(0,3,1,2) / 255
-
-                # ---- get results
-                output_batch = model(batch_arr)
-                output_batch = output_batch.argmax(axis=1)
-
-                #remove the padding from each tile, we only keep the center            
-                output_batch = output_batch[:,base_stride_size//2:-base_stride_size//2,base_stride_size//2:-base_stride_size//2]            
-
-                # --- pull from GPU and append to rest of output 
-                output_batch = output_batch.detach().cpu().numpy()            
-
-                reconst = np.concatenate(np.concatenate(output_batch.reshape(int(np.shape(big_patch)[1]/(patch_size//2))-1,int(np.shape(big_patch)[0]/(patch_size//2))-1,base_stride_size,base_stride_size),axis=2),axis=0)
-
-                output[batch_points[0]:(batch_points[0]+np.shape(big_patch)[0]-base_stride_size),batch_points[1]:(batch_points[1]+np.shape(big_patch)[1]-base_stride_size)] = reconst
-
+        else:            
 
             if(args.annotation.lower() == 'wsi'):
-                cv2.imwrite(newfname_class,(output>0)*255)
+                img_dims = [0,0,img["img_dims"][0][0],img["img_dims"][0][1]]
             else:
+                img_dims = img.get_dimensions_of_annotation(args.color,args.annotation)
 
-            #in case there was extra padding to get a multiple of patch size, remove that as well
-                _,mask = img.get_annotated_region(args.resolution,args.color,args.annotation,return_img=False)            
-                output = output[0:mask.shape[0], 0:mask.shape[1]] #remove paddind, crop back
-                output = np.bitwise_and(output>0,mask>0)*255
+            if img_dims:
+                output = run_model(img_dims,patch_size,stride_size,base_stride_size,batch_size,args,img,annotation=args.annotation)        
                 cv2.imwrite(newfname_class, output)
+                output = None
+                print('Elapsed time = ' + str(time.time()-start_time))
 
-        else:
-            print('No annotation of color')
+            else:
+                print('No annotation of color')
     else:
-        print(f"{xml_fname} not found, skipping")
-
-    output = None
-    output_batch = None
-    mask = None
-    print('Total time = ' + str(time.time()-start_time))
+        print('Could not find ' + str(xml_fname))      
