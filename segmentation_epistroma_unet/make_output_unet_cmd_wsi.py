@@ -10,21 +10,18 @@
 import argparse
 import os
 import glob
-import math
-
 import numpy as np
 import cv2
 import torch
 import sys
 import time
+import math
+from pathlib import Path
 
 from WSI_handling import wsi
-
-
-# In[ ]:
-
-
 from unet import UNet
+
+from shapely.geometry import Polygon
 
 
 # In[ ]:
